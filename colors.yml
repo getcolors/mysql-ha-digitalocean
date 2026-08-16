@@ -1,0 +1,162 @@
+# Desired state for mysql-ha-digitalocean. Non-secret values only.
+# Credentials belong in the gitignored .envrc.private as COLORS_PAR_* variables.
+# Never export COLORS_PAR_PROFILE: it selects this deployment's remote state.
+#
+# Required credentials:
+#   DigitalOcean       COLORS_PAR_DO_TOKEN
+#   Cloudflare         COLORS_PAR_CLOUDFLARE_API_TOKEN
+#   state in R2        COLORS_PAR_R2_ACCESS_KEY_ID
+#                      COLORS_PAR_R2_SECRET_ACCESS_KEY
+#   backups in R2      COLORS_PAR_BACKUP_R2_ACCESS_KEY_ID
+#                      COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY
+#   database           COLORS_PAR_MYSQL_ADMIN_PASSWORD
+#                      COLORS_PAR_MYSQL_REPLICATION_PASSWORD
+#
+# A key that is absent is absent, and its block does not render. A key holding
+# REPLACE_ME is *present*, so the block renders the placeholder verbatim. That
+# is why required-but-unknown values below say REPLACE_ME.
+#
+# ---------------------------------------------------------------------------
+# BENCHMARK HARNESS NOTE
+#
+# This file is deliberately minimal. It fixes only what must be held constant
+# against postgres-ha-digitalocean for the creation-effort comparison to mean
+# anything: provider, region, node budget, storage targets, and the destroy
+# guard. It deliberately does NOT choose the HA topology, the failover
+# orchestrator, the backup tool, or the PITR mechanism — selecting those is the
+# work being measured, and pre-deciding them here would delete the finding.
+#
+# The mysql-ha package owns the final configuration schema and is expected to
+# extend and rename these keys as its design requires. Symmetry with the
+# PostgreSQL deployment matters more than any individual key name.
+# ---------------------------------------------------------------------------
+
+profile: mysql-ha-digitalocean
+workdir: .colors
+
+provider-compute: digitalocean
+provider-dns: cloudflare
+provider-backend: r2
+
+# Preserve this guard in committed desired state. Teardown at the end of the
+# benchmark is authorized, but it must go through an explicit one-run
+# COLORS_PAR_COMPUTE_PREVENT_DESTROY=false override rather than an edit here.
+compute-prevent-destroy: true
+
+# --- cluster -----------------------------------------------------------------
+
+# The client-facing endpoint. What this name resolves to after a failover is
+# precisely the problem the package has to solve.
+cluster-host: my-ha.bigconfig.space
+
+# Node budget, not topology. Three is the cost ceiling authorized for this
+# benchmark and is held identical across both engines. A design needing a
+# quorum store may colocate it on these three; it may not provision a fourth
+# tier of machines without re-authorization.
+cluster-nodes: 3
+
+# --- DigitalOcean ------------------------------------------------------------
+
+digitalocean-name: mysql-ha
+digitalocean-region: ams3
+digitalocean-size: s-2vcpu-4gb
+digitalocean-image: ubuntu-24-04-x64
+# ONCE's DigitalOcean template consumes SSH keys already registered on the
+# account — `ssh_keys = [...]` takes IDs or fingerprints and uploads nothing.
+# ~/.ssh/id_ed25519.pub is already registered as `vaultwarden-digitalocean`,
+# ID 58495393, and DigitalOcean rejects a second registration of the same public
+# key with a 422. So reference the existing one rather than creating a duplicate.
+digitalocean-ssh-keys: "58495393"
+
+# The matching private key, used by Ansible to reach the droplets from here.
+digitalocean-ssh-private-key: ~/.ssh/id_ed25519
+
+# Restrict administrative SSH to the operator's current public IPv4.
+digitalocean-ssh-sources:
+  - 129.159.242.163/32
+
+# Who may reach the MySQL port on the client endpoint. Kept separate from the
+# SSH list on purpose: administrative access and client access are different
+# populations, and 3306 is a genuinely public port. Same value here only
+# because this deployment has exactly one client — the operator.
+digitalocean-client-sources:
+  - 129.159.242.163/32
+
+# Discover the configured region's default VPC at runtime. There is deliberately
+# no VPC UUID, VPC CIDR, or VPC resource in desired state.
+digitalocean-vpc-mode: default
+
+# --- DNS ---------------------------------------------------------------------
+
+# Split zones across the two deployments so the two benchmark agents cannot
+# contend on one zone's API. This is a known uncontrolled difference between the
+# runs and is recorded as such in the benchmark report.
+cloudflare-zone: bigconfig.space
+cloudflare-proxied: false
+
+# --- MySQL -------------------------------------------------------------------
+
+# The client port and the Group Replication port. 33061 never leaves the VPC:
+# the firewall and group_replication_ip_allowlist both say so.
+mysql-port: 3306
+mysql-group-port: 33061
+
+# MySQL requires the group name to be a UUID and treats it as the identity of
+# the group itself — it is the UUID every transaction's GTID is stamped with.
+# Generated once for this deployment; changing it on a live cluster orphans
+# every GTID the cluster has ever produced.
+mysql-group-name: ba7ef9db-fc34-4735-b662-de317780e764
+
+# The account clients connect as, and the account distributed recovery and the
+# binary-log archiver use. Their passwords are COLORS_PAR_MYSQL_ADMIN_PASSWORD
+# and COLORS_PAR_MYSQL_REPLICATION_PASSWORD; there is no third credential and
+# the package is built not to need one.
+mysql-admin-user: admin
+mysql-replication-user: repl
+
+# s-2vcpu-4gb has 4 GB. This leaves room for the 128 MB verification instance
+# the daily restore check starts beside the real server.
+mysql-innodb-buffer-pool-size: 1G
+
+# --- backups in R2 -----------------------------------------------------------
+
+# Its own bucket, deliberately not the state bucket, and created fresh so both
+# engines start from identical storage.
+backup-r2-bucket: mysql-ha-backup
+backup-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
+backup-r2-region: auto
+backup-r2-prefix: mysql-ha-digitalocean
+
+# Daily snapshot, then the verified restore ninety minutes later — far enough
+# apart that the restore has real point-in-time material to replay on top of
+# the snapshot rather than replaying nothing.
+backup-snapshot-oncalendar: "*-*-* 01:00:00"
+backup-restore-check-oncalendar: "*-*-* 02:30:00"
+
+# The recovery-point objective. Binary logs are streamed continuously into a
+# local spool and pushed to R2 on this interval, so this — not how often MySQL
+# rotates a log — bounds how much can be lost if a member is destroyed.
+backup-binlog-upload-interval: 1min
+
+backup-retention-days: 14
+
+# How far behind the restored copy may be before the daily verified restore
+# reports a failure. Fifteen minutes: comfortably more than the restore itself
+# takes, comfortably less than one snapshot interval.
+backup-restore-max-lag-seconds: 900
+
+# --- cadence -----------------------------------------------------------------
+
+# The primary writes a heartbeat on this interval. Every health check reads it
+# on every member, which is how "replication is streaming" is asserted as a
+# fact about data rather than about counters.
+heartbeat-interval: 10s
+
+# How often each member checks whether it should be holding the reserved IP.
+# This bounds how long the client endpoint lags a failover.
+endpoint-poll-interval: 10s
+
+# --- R2 state backend --------------------------------------------------------
+
+r2-bucket: tofu-state-319271fed8bc6d2d9059362be1165f37-eu
+r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "package-mysql-ha-green": {
+      "source": "getcolors/mysql-ha",
+      "sourceType": "github",
+      "skillPath": "skills/package-mysql-ha-green/SKILL.md",
+      "computedHash": "4dfe8025ba5ee693e862a1ebb661bc5f9a33149abf03ed5ff97e14f95a3cc5b7"
+    }
+  }
+}
