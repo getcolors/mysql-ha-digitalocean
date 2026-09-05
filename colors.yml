@@ -47,7 +47,7 @@ compute-prevent-destroy: true
 
 # The client-facing endpoint. What this name resolves to after a failover is
 # precisely the problem the package has to solve.
-cluster-host: my-ha.bigconfig.space
+cluster-host: mysql-ha.bigconfig.online
 
 # Node budget, not topology. Three is the cost ceiling authorized for this
 # benchmark and is held identical across both engines. A design needing a
@@ -66,21 +66,23 @@ digitalocean-image: ubuntu-24-04-x64
 # ~/.ssh/id_ed25519.pub is already registered as `vaultwarden-digitalocean`,
 # ID 58495393, and DigitalOcean rejects a second registration of the same public
 # key with a 422. So reference the existing one rather than creating a duplicate.
-digitalocean-ssh-keys: "58495393"
+# No digitalocean-ssh-keys: keygen mode per workspace standards/ssh-keypair.md.
+# The first real create generates ~/.ssh/<profile> and registers it under the
+# profile's name; delete removes it last. Supplying digitalocean-ssh-keys (and
+# digitalocean-ssh-private-key) would switch this deployment to opt-out mode.
 
 # The matching private key, used by Ansible to reach the droplets from here.
-digitalocean-ssh-private-key: ~/.ssh/id_ed25519
 
 # Restrict administrative SSH to the operator's current public IPv4.
 digitalocean-ssh-sources:
-  - 129.159.242.163/32
+  - 89.168.97.254/32
 
 # Who may reach the MySQL port on the client endpoint. Kept separate from the
 # SSH list on purpose: administrative access and client access are different
 # populations, and 3306 is a genuinely public port. Same value here only
 # because this deployment has exactly one client — the operator.
 digitalocean-client-sources:
-  - 129.159.242.163/32
+  - 89.168.97.254/32
 
 # Discover the configured region's default VPC at runtime. There is deliberately
 # no VPC UUID, VPC CIDR, or VPC resource in desired state.
@@ -91,7 +93,7 @@ digitalocean-vpc-mode: default
 # Split zones across the two deployments so the two benchmark agents cannot
 # contend on one zone's API. This is a known uncontrolled difference between the
 # runs and is recorded as such in the benchmark report.
-cloudflare-zone: bigconfig.space
+cloudflare-zone: bigconfig.online
 cloudflare-proxied: false
 
 # --- MySQL -------------------------------------------------------------------
@@ -122,7 +124,7 @@ mysql-innodb-buffer-pool-size: 1G
 
 # Its own bucket, deliberately not the state bucket, and created fresh so both
 # engines start from identical storage.
-backup-r2-bucket: mysql-ha-backup
+backup-r2-bucket: langfuse-backup
 backup-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
 backup-r2-region: auto
 backup-r2-prefix: mysql-ha-digitalocean
