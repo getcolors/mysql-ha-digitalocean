@@ -5,7 +5,7 @@
       "source": "getcolors/mysql-ha",
       "sourceType": "github",
       "skillPath": "skills/package-mysql-ha-green/SKILL.md",
-      "computedHash": "b897b829c653e257c67f319c0987923de6c03f70cb513b69bf499541a8cc62cd"
+      "computedHash": "130e87d326ce209e55b807dcbfedb7eb78effad5fe5ecfd3812ff57b897f2ef1"
     }
   }
 }
